@@ -5,226 +5,111 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bingo Digital</title>
 <style>
-  :root { --bg:#12141c; --card:#1d2130; --ink:#f3f4f8; --mute:#9aa0b4; --acc:#ffb703; --ok:#2ec27e; --bad:#e5484d; }
+  :root { --bg:#12141c; --card:#1d2130; --ink:#f3f4f8; --mute:#9aa0b4; --acc:#ffb703; --bad:#e5484d; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:16px; max-width:640px; margin-inline:auto; }
-  h1 { margin:0 0 12px; font-size:1.5rem; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:12px; max-width:720px; margin-inline:auto; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
   button, .btn { background:var(--card); color:var(--ink); border:1px solid #333a52; border-radius:10px; padding:10px 14px; font-size:1rem; cursor:pointer; }
-  button.primary, .btn.primary { background:var(--acc); color:#222; border-color:var(--acc); font-weight:700; }
+  .btn.primary { background:var(--acc); color:#222; border-color:var(--acc); font-weight:700; }
   button.danger { background:var(--bad); border-color:var(--bad); font-weight:700; }
-  button.on { outline:2px solid var(--acc); }
-  input[type=number] { width:100px; padding:10px; font-size:1rem; border-radius:10px; border:1px solid #333a52; background:var(--card); color:var(--ink); }
-  #status { color:var(--mute); margin:8px 0; min-height:1.3em; }
-  .bar { height:8px; background:var(--card); border-radius:4px; overflow:hidden; margin-bottom:12px; display:none; }
-  .bar div { height:100%; width:0; background:var(--acc); transition:width .2s; }
-  .board { background:var(--card); border-radius:14px; padding:10px; margin-bottom:16px; }
-  .board h3 { margin:0 0 8px; display:flex; justify-content:space-between; align-items:center; font-size:1rem; }
-  .board h3 button { padding:4px 10px; font-size:.85rem; }
-  .grid { display:grid; gap:6px; }
-  .cell { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:1.4rem; font-weight:700; background:#2a3045; border-radius:10px; user-select:none; cursor:pointer; }
-  .cell.m { background:var(--ok); color:#fff; text-decoration:line-through; text-decoration-thickness:3px; }
-  .cell.empty { color:var(--mute); font-size:.8rem; }
-  .editing .cell { outline:2px dashed var(--acc); }
-  .win { color:var(--acc); font-weight:700; }
+  button.tab.on { background:var(--acc); color:#222; border-color:var(--acc); font-weight:700; }
+  #hint { color:var(--mute); font-size:.9rem; margin:6px 0; }
+  #wrap { position:relative; touch-action:manipulation; line-height:0; border-radius:8px; overflow:hidden; user-select:none; -webkit-user-select:none; }
+  #wrap img { width:100%; display:block; pointer-events:none; }
+  .mark { position:absolute; width:7%; aspect-ratio:1; transform:translate(-50%,-50%); border-radius:50%; background:rgba(229,72,77,.55); border:3px solid rgba(229,72,77,.95); pointer-events:none; }
 </style>
 </head>
 <body>
-<h1>🎱 Bingo Digital</h1>
 
 <div class="row">
   <label class="btn primary">📷 Subir foto del tablero
     <input id="file" type="file" accept="image/*" hidden>
   </label>
-  <button id="edit">✏️ Editar números</button>
   <button id="reset" class="danger">Reset</button>
+  <button id="del">Borrar tablero</button>
 </div>
+<div class="row" id="tabs"></div>
+<div id="hint"></div>
+<div id="wrap"></div>
 
-<div class="row">
-  <input id="num" type="number" min="1" max="99" placeholder="Nº">
-  <button id="call">Marcar en todos</button>
-</div>
-
-<div class="bar" id="bar"><div></div></div>
-<div id="status"></div>
-<div id="boards"></div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
 <script>
-const KEY = 'bingo-v1';
-let boards = [];       // [{cells:[[n|null]], marks:[[bool]]}]
-let editMode = false;
+const KEY = 'bingo-v2';
+const R = 3.5; // radio de la marca, % del ancho
+let boards = [];   // [{img: dataURL, marks: [[x%, y%]]}]
+let cur = 0;
 
 try { boards = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) {}
-const save = () => localStorage.setItem(KEY, JSON.stringify(boards));
 const $ = id => document.getElementById(id);
-const setStatus = t => $('status').textContent = t;
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(boards)); }
+  catch (e) { alert('No hay espacio para guardar. Borra algún tablero.'); }
+}
 
 function render() {
-  const root = $('boards');
-  root.innerHTML = '';
-  boards.forEach((b, bi) => {
-    const el = document.createElement('div');
-    el.className = 'board' + (editMode ? ' editing' : '');
-    const cols = Math.max(...b.cells.map(r => r.length));
-    const bingo = hasBingo(b);
-    el.innerHTML = `<h3><span>Tablero ${bi + 1} ${bingo ? '<span class="win">¡BINGO!</span>' : ''}</span><button data-del="${bi}">Borrar</button></h3>`;
-    const g = document.createElement('div');
-    g.className = 'grid';
-    g.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    b.cells.forEach((row, r) => {
-      for (let c = 0; c < cols; c++) {
-        const v = row[c];
-        const d = document.createElement('div');
-        d.className = 'cell' + (b.marks[r][c] ? ' m' : '') + (v == null ? ' empty' : '');
-        d.textContent = v == null ? (editMode ? '+' : 'LIBRE') : v;
-        d.onclick = () => cellClick(bi, r, c);
-        g.appendChild(d);
-      }
-    });
-    el.appendChild(g);
-    root.appendChild(el);
+  if (cur >= boards.length) cur = Math.max(0, boards.length - 1);
+  $('tabs').innerHTML = '';
+  if (boards.length > 1) boards.forEach((_, i) => {
+    const b = document.createElement('button');
+    b.className = 'tab' + (i === cur ? ' on' : '');
+    b.textContent = 'Tablero ' + (i + 1);
+    b.onclick = () => { cur = i; render(); };
+    $('tabs').appendChild(b);
   });
-  root.querySelectorAll('[data-del]').forEach(btn => btn.onclick = () => {
-    if (confirm('¿Borrar este tablero?')) { boards.splice(+btn.dataset.del, 1); save(); render(); }
+  const wrap = $('wrap');
+  wrap.innerHTML = '';
+  const b = boards[cur];
+  $('hint').textContent = b ? 'Toca un número para marcarlo. Toca una marca para quitarla.' : 'Sube una foto de tu tablero para empezar.';
+  if (!b) return;
+  const img = new Image();
+  img.src = b.img;
+  wrap.appendChild(img);
+  b.marks.forEach(([x, y]) => {
+    const m = document.createElement('div');
+    m.className = 'mark';
+    m.style.left = x + '%'; m.style.top = y + '%';
+    wrap.appendChild(m);
   });
 }
 
-function cellClick(bi, r, c) {
-  const b = boards[bi];
-  if (editMode) {
-    const v = prompt('Número (vacío = casilla libre):', b.cells[r][c] ?? '');
-    if (v === null) return;
-    b.cells[r][c] = v.trim() === '' ? null : parseInt(v, 10);
-  } else {
-    b.marks[r][c] = !b.marks[r][c];
-  }
+$('wrap').addEventListener('click', e => {
+  const b = boards[cur];
+  if (!b) return;
+  const r = $('wrap').getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * 100;
+  const y = (e.clientY - r.top) / r.height * 100;
+  const k = b.marks.findIndex(([mx, my]) => Math.hypot(mx - x, (my - y) * r.height / r.width) < R);
+  if (k >= 0) b.marks.splice(k, 1); else b.marks.push([x, y]);
   save(); render();
-}
-
-function hasBingo(b) {
-  const R = b.cells.length, C = Math.max(...b.cells.map(r => r.length));
-  const m = (r, c) => b.marks[r][c];
-  for (let r = 0; r < R; r++) if ([...Array(C).keys()].every(c => m(r, c))) return true;
-  for (let c = 0; c < C; c++) if ([...Array(R).keys()].every(r => m(r, c))) return true;
-  if (R === C) {
-    if ([...Array(R).keys()].every(i => m(i, i))) return true;
-    if ([...Array(R).keys()].every(i => m(i, C - 1 - i))) return true;
-  }
-  return false;
-}
-
-$('edit').onclick = () => { editMode = !editMode; $('edit').classList.toggle('on', editMode); render(); };
+});
 
 $('reset').onclick = () => {
-  if (!confirm('¿Borrar todas las marcas? (los tableros se quedan)')) return;
-  boards.forEach(b => b.marks = b.cells.map(r => r.map(() => false)));
+  if (!boards.length || !confirm('¿Borrar todas las marcas?')) return;
+  boards.forEach(b => b.marks = []);
   save(); render();
 };
-
-$('call').onclick = () => {
-  const n = parseInt($('num').value, 10);
-  if (!n) return;
-  let hit = 0;
-  boards.forEach(b => b.cells.forEach((row, r) => row.forEach((v, c) => { if (v === n) { b.marks[r][c] = true; hit++; } })));
-  save(); render();
-  setStatus(hit ? `Marcado el ${n}` : `El ${n} no está en tus tableros`);
-  $('num').value = ''; $('num').focus();
+$('del').onclick = () => {
+  if (!boards.length || !confirm('¿Borrar este tablero?')) return;
+  boards.splice(cur, 1); save(); render();
 };
-$('num').addEventListener('keydown', e => { if (e.key === 'Enter') $('call').click(); });
 
-// ---------- OCR ----------
-function loadImage(file) {
-  return new Promise((res, rej) => {
-    const img = new Image();
-    img.onload = () => res(img);
-    img.onerror = rej;
-    img.src = URL.createObjectURL(file);
-  });
-}
-
-function preprocess(img) {
-  const scale = Math.min(2, 2000 / Math.max(img.width, img.height));
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(img.width * scale);
-  cv.height = Math.round(img.height * scale);
-  const ctx = cv.getContext('2d');
-  ctx.drawImage(img, 0, 0, cv.width, cv.height);
-  const d = ctx.getImageData(0, 0, cv.width, cv.height);
-  const px = d.data;
-  let sum = 0;
-  for (let i = 0; i < px.length; i += 4) {
-    const g = 0.3 * px[i] + 0.59 * px[i + 1] + 0.11 * px[i + 2];
-    px[i] = px[i + 1] = px[i + 2] = g;
-    sum += g;
-  }
-  const mean = sum / (px.length / 4);
-  // contraste simple alrededor de la media
-  for (let i = 0; i < px.length; i += 4) {
-    const v = Math.max(0, Math.min(255, (px[i] - mean) * 1.8 + mean));
-    px[i] = px[i + 1] = px[i + 2] = v;
-  }
-  ctx.putImageData(d, 0, 0);
-  return cv;
-}
-
-function cluster1D(vals, gap) {
-  const s = [...vals].sort((a, b) => a - b);
-  const groups = [[s[0]]];
-  for (let i = 1; i < s.length; i++) {
-    if (s[i] - s[i - 1] > gap) groups.push([]);
-    groups[groups.length - 1].push(s[i]);
-  }
-  return groups.map(g => g.reduce((a, b) => a + b, 0) / g.length);
-}
-
-function buildGrid(words) {
-  const items = words
-    .map(w => ({ n: parseInt(w.text, 10), x: (w.bbox.x0 + w.bbox.x1) / 2, y: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }))
-    .filter(w => w.n >= 1 && w.n <= 99);
-  if (items.length < 4) return null;
-  const medH = items.map(i => i.h).sort((a, b) => a - b)[Math.floor(items.length / 2)];
-  const rowsY = cluster1D(items.map(i => i.y), medH * 0.7);
-  const colsX = cluster1D(items.map(i => i.x), medH * 0.9);
-  const grid = rowsY.map(() => colsX.map(() => null));
-  items.forEach(i => {
-    const r = nearest(rowsY, i.y), c = nearest(colsX, i.x);
-    if (grid[r][c] == null) grid[r][c] = i.n;
-  });
-  return grid;
-}
-const nearest = (arr, v) => arr.reduce((bi, a, i) => Math.abs(a - v) < Math.abs(arr[bi] - v) ? i : bi, 0);
-
-$('file').onchange = async e => {
+$('file').onchange = e => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
-  const bar = $('bar'), fill = bar.firstElementChild;
-  bar.style.display = 'block'; fill.style.width = '0';
-  setStatus('Leyendo la foto…');
-  try {
-    const cv = preprocess(await loadImage(f));
-    const worker = await Tesseract.createWorker('eng', 1, {
-      logger: m => { if (m.status === 'recognizing text') fill.style.width = Math.round(m.progress * 100) + '%'; }
-    });
-    await worker.setParameters({ tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '11' });
-    const { data } = await worker.recognize(cv);
-    await worker.terminate();
-    const grid = buildGrid(data.words.filter(w => w.confidence > 35));
-    if (!grid) { setStatus('No pude leer números. Prueba con una foto más recta y con buena luz.'); return; }
-    boards.push({ cells: grid, marks: grid.map(r => r.map(() => false)) });
+  const img = new Image();
+  img.onload = () => {
+    const s = Math.min(1, 1400 / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    boards.push({ img: cv.toDataURL('image/jpeg', 0.82), marks: [] });
+    cur = boards.length - 1;
     save(); render();
-    setStatus('Listo. Si algún número salió mal, toca "Editar números" y corrígelo.');
-  } catch (err) {
-    console.error(err);
-    setStatus('Error leyendo la foto: ' + err.message);
-  } finally {
-    bar.style.display = 'none';
-  }
+  };
+  img.src = URL.createObjectURL(f);
 };
 
 render();
-if (!boards.length) setStatus('Sube una foto de tu tablero para empezar.');
 </script>
 </body>
 </html>
